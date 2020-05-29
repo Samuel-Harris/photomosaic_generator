@@ -9,17 +9,17 @@ def main():
     # input_directory_path = os.path.abspath(input("What is the input photo directory path?"))
     # C:\\my_stuff\\photomosaic_generator\\extremely_reduced_input_photos
     input_directory_path = os.path.abspath(
-        "C:\\my_stuff\\uni_stuff_backup\\personal_projects\\photomosaic_generator\\reduced_input_photos")
+        "reduced_input_photos")
 
     # output_directory_path = os.path.abspath(input("What is the output directory path?"))
     # C:\\my_stuff\\photomosaic_generator\\output_photos
     output_directory_path = os.path.abspath(
-        "C:\\my_stuff\\uni_stuff_backup\\personal_projects\\photomosaic_generator\\output_photos\\output_image.jpg")
+        "output_photos\\output_image.jpg")
 
     # target_image_file_path = os.path.abspath(input("What is the target image?"))
     # C:\\my_stuff\\photomosaic_generator\\target_image\\target_image.jpg
     target_image_file_path = os.path.abspath(
-        "C:\\my_stuff\\uni_stuff_backup\\personal_projects\\photomosaic_generator\\target_image\\target_image.jpg")
+        "target_image\\target_image.jpg")
 
     # x_tiles = input("How many images in a row?")
     x_tiles = 100
