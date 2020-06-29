@@ -15,6 +15,7 @@ import sys
 class PhotomosaicGenerator:
     def __init__(self):
         self.input_images = None
+        self.input_directory_path = None
         self.target_image = None
         self.output_image = None
         self.x_tiles = None
@@ -28,22 +29,24 @@ class PhotomosaicGenerator:
         self.match_image = None
         self.find_cluster = None
 
-    def pre_process_target(self, target_image_file_path, x_tiles, y_tiles):
+    def set_target_image(self, target_image_file_path):
+        self.target_image = io.imread(target_image_file_path)
+
+    def pre_process_target(self, x_tiles, y_tiles):
         self.y_tiles = y_tiles
         self.x_tiles = x_tiles
-        self.target_image = io.imread(target_image_file_path)
         self.tile_height = self.target_image.shape[0] // y_tiles
         self.tile_width = self.target_image.shape[1] // x_tiles
-        self.target_image = resize(io.imread(target_image_file_path),
-                                   (self.tile_height * y_tiles, self.tile_width * x_tiles),
-                                   anti_aliasing=True)
+        self.target_image = resize(self.target_image, (self.tile_height * y_tiles, self.tile_width * x_tiles), anti_aliasing=True)
 
-    def pre_process_input(self, input_directory_path, threads=7):
+    def set_input_directory_path(self, input_directory_path):
+        self.input_directory_path = input_directory_path
+
+    def pre_process_input(self, threads=7):
         self.input_images = []
         with closing(ThreadPool(threads)) as p:
-            f = partial
-            for dir_path, subdir_names, file_names in walk(input_directory_path):
-                p.map(f(self.pre_process_input_image, dir_path=dir_path), file_names)
+            for dir_path, subdir_names, file_names in walk(self.input_directory_path):
+                p.map(partial(self.pre_process_input_image, dir_path=dir_path), file_names)
         self.input_images = np.array(self.input_images)
 
     def pre_process_input_image(self, file_name, dir_path):
@@ -58,11 +61,23 @@ class PhotomosaicGenerator:
     def set_image_matcher(self, match_image):
         self.match_image = match_image
 
+    # def match_tiles(self, processes=7):
+    #     shared_arr = Array(ctypes.c_double, [0.0] * self.y_tiles * self.x_tiles)
+    #     # self.tile_cluster_indexes = np.zeros((self.y_tiles, self.x_tiles))
+    #
+    #     with closing(Pool(processes=processes, initializer=self.match_tile_process_init,
+    #                       initargs=(shared_arr, self.target_image, self.tile_height, self.tile_width, self.find_cluster,
+    #                                 self.clusters, self.match_image, self.input_images, self.y_tiles, self.x_tiles,))) \
+    #             as p:
+    #         p.map(self.match_tile, ((y, x) for y in range(self.y_tiles) for x in range(self.x_tiles)))
+    #     arr = np.frombuffer(shared_arr.get_obj())
+    #     self.tile_cluster_indexes = arr.reshape((self.y_tiles, self.x_tiles))
+
     def match_tiles(self, processes=7):
         shared_arr = Array(ctypes.c_double, [0.0] * self.y_tiles * self.x_tiles)
         # self.tile_cluster_indexes = np.zeros((self.y_tiles, self.x_tiles))
 
-        with closing(Pool(processes=processes, initializer=self.match_tile_process_init,
+        with closing(ThreadPool(processes=processes, initializer=self.match_tile_process_init,
                           initargs=(shared_arr, self.target_image, self.tile_height, self.tile_width, self.find_cluster,
                                     self.clusters, self.match_image, self.input_images, self.y_tiles, self.x_tiles,))) \
                 as p:
@@ -128,6 +143,9 @@ class PhotomosaicGenerator:
 
     def save_image(self, output_directory_path):
         io.imsave(output_directory_path, self.output_image, plugin='pil')
+
+    def get_image(self):
+        return self.output_image
 
     def show_image(self):
         io.imshow(self.target_image)
