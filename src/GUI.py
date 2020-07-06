@@ -91,6 +91,12 @@ class window(QMainWindow):
             print('pre-processing input')
             photomosaic_generator.pre_process_input(threads=7)
 
+            print('fitting clusters')
+            photomosaic_generator.fit_clusters(k_means_fit_images, k_means_find_cluster)
+
+            print('setting image matcher')
+            photomosaic_generator.set_image_matcher(MSE_match_images)
+
             print('matching tiles')
             photomosaic_generator.match_tiles()
 
@@ -100,13 +106,6 @@ class window(QMainWindow):
             print('showing images')
             img = photomosaic_generator.get_image()
             print(img.shape)
-            # height, width, channel = img.shape
-            # bytesPerLine = 3 * width
-            # qImg = QImage(img, width, height, bytesPerLine, QImage.Format_RGB888)
-            # pixmap = QPixmap.fromImage(qImg)
-            # label = QLabel(self)
-            # label.setPixmap(pixmap)
-            # self.lay.addWidget(label)
 
             img *= 255
             img = img.astype('int8')
@@ -117,7 +116,6 @@ class window(QMainWindow):
             bytesPerLine = 3 * width
             qImg = QImage(img, width, height, bytesPerLine, QImage.Format_RGB888)
             pixmap = QPixmap.fromImage(qImg).scaled(800, 800, QtCore.Qt.KeepAspectRatio)
-            # pixmap = QPixmap(r'C:/my_stuff/photomosaic_generator/target_image/target_image.jpg')
             self.image.setPixmap(pixmap)
             self.resize(pixmap.width(), pixmap.height())
 
