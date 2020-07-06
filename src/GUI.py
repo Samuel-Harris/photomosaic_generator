@@ -1,3 +1,5 @@
+from PyQt5 import QtCore
+
 from MSE_tile_matcher import MSE_match_images
 from K_means_clusterer import k_means_fit_images, k_means_find_cluster
 
@@ -17,8 +19,8 @@ class window(QMainWindow):
 
     def __init__(self, photomosaic_generator):
         self.photomosaic_generator = photomosaic_generator
-        self.x_tiles = 10
-        self.y_tiles = 10
+        self.x_tiles = 100
+        self.y_tiles = 100
 
         super(window, self).__init__()
         self.setGeometry(1000, 100, 500, 500)
@@ -54,16 +56,14 @@ class window(QMainWindow):
         self.setCentralWidget(self.central_widget)
         self.lay = QVBoxLayout(self.central_widget)
 
-        label = QLabel(self)
-        pixmap = QPixmap(r'C:/my_stuff/photomosaic_generator/target_image/target_image.jpg')
-        label.setPixmap(pixmap)
-        self.resize(pixmap.width(), pixmap.height())
-        self.lay.addWidget(label)
+        self.image = QLabel(self)
+        pixmap = QPixmap(r'C:/my_stuff/photomosaic_generator/output_photos/best_image.jpg').scaled(800, 800, QtCore.Qt.KeepAspectRatio)
+        self.image.setPixmap(pixmap)
+        self.lay.addWidget(self.image)
 
         self.show()
 
     def close_application(self):
-        print('whooo so custom')
         sys.exit()
 
     def set_input_dir(self):
@@ -91,12 +91,6 @@ class window(QMainWindow):
             print('pre-processing input')
             photomosaic_generator.pre_process_input(threads=7)
 
-            print('fitting clusters')
-            photomosaic_generator.fit_clusters(k_means_fit_images, k_means_find_cluster)
-
-            print('setting image matcher')
-            photomosaic_generator.set_image_matcher(MSE_match_images)
-
             print('matching tiles')
             photomosaic_generator.match_tiles()
 
@@ -114,11 +108,18 @@ class window(QMainWindow):
             # label.setPixmap(pixmap)
             # self.lay.addWidget(label)
 
-            label = QLabel(self)
-            pixmap = QPixmap(r'C:/my_stuff/photomosaic_generator/target_image/target_image.jpg')
-            label.setPixmap(pixmap)
+            img *= 255
+            img = img.astype('int8')
+            print(img[0][0])
+            print(type(img))
+            print(img.dtype)
+            height, width, channel = img.shape
+            bytesPerLine = 3 * width
+            qImg = QImage(img, width, height, bytesPerLine, QImage.Format_RGB888)
+            pixmap = QPixmap.fromImage(qImg).scaled(800, 800, QtCore.Qt.KeepAspectRatio)
+            # pixmap = QPixmap(r'C:/my_stuff/photomosaic_generator/target_image/target_image.jpg')
+            self.image.setPixmap(pixmap)
             self.resize(pixmap.width(), pixmap.height())
-            self.lay.addWidget(label)
 
             self.show()
             print('image shown')

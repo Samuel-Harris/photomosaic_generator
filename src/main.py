@@ -8,8 +8,11 @@ import os
 
 
 def main():
+    print('running')
     photomosaic_generator = PhotomosaicGenerator()
+    print('running')
     run(photomosaic_generator)
+    print('finished')
 
 
 if __name__ == '__main__':
