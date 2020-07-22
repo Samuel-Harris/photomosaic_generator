@@ -1,5 +1,8 @@
 import ctypes
 
+from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import scale
 from skimage import io
 from skimage.transform import resize
 from multiprocessing.pool import ThreadPool
@@ -26,8 +29,6 @@ class PhotomosaicGenerator:
         self.scores = None
         self.clusters = None
         self.tile_cluster_indexes = None
-        self.match_image = None
-        self.find_cluster = None
 
     def set_target_image(self, target_image_file_path):
         self.target_image = io.imread(target_image_file_path)
@@ -54,40 +55,27 @@ class PhotomosaicGenerator:
             self.input_images.append(resize(io.imread(dir_path + "\\" + file_name), (self.tile_height, self.tile_width),
                                             anti_aliasing=True))
 
-    def fit_clusters(self, cluster_fit, find_cluster):
-        self.clusters = cluster_fit(self.input_images)
-        self.find_cluster = find_cluster
+    def fit_clusters(self):
+        reduced_data = np.reshape(self.input_images, (self.input_images.shape[0], self.input_images.shape[1]*self.input_images.shape[2]*self.input_images.shape[3]))
+        self.clusters = KMeans().fit(reduced_data)
 
-    def set_image_matcher(self, match_image):
-        self.match_image = match_image
-
-    # def match_tiles(self, processes=7):
-    #     shared_arr = Array(ctypes.c_double, [0.0] * self.y_tiles * self.x_tiles)
-    #     # self.tile_cluster_indexes = np.zeros((self.y_tiles, self.x_tiles))
-    #
-    #     with closing(Pool(processes=processes, initializer=self.match_tile_process_init,
-    #                       initargs=(shared_arr, self.target_image, self.tile_height, self.tile_width, self.find_cluster,
-    #                                 self.clusters, self.match_image, self.input_images, self.y_tiles, self.x_tiles,))) \
-    #             as p:
-    #         p.map(self.match_tile, ((y, x) for y in range(self.y_tiles) for x in range(self.x_tiles)))
-    #     arr = np.frombuffer(shared_arr.get_obj())
-    #     self.tile_cluster_indexes = arr.reshape((self.y_tiles, self.x_tiles))
+    def find_cluster(self, target_tile, k_means):
+        img = np.reshape(target_tile, (1, target_tile.shape[0]*target_tile.shape[1]*target_tile.shape[2]))
+        cluster_num = k_means.predict(img)
+        return (i for i, x in enumerate(k_means.labels_) if x == cluster_num)
 
     def match_tiles(self, processes=7):
         shared_arr = Array(ctypes.c_double, [0.0] * self.y_tiles * self.x_tiles)
-        # self.tile_cluster_indexes = np.zeros((self.y_tiles, self.x_tiles))
 
         with closing(ThreadPool(processes=processes, initializer=self.match_tile_process_init,
                           initargs=(shared_arr, self.target_image, self.tile_height, self.tile_width, self.find_cluster,
-                                    self.clusters, self.match_image, self.input_images, self.y_tiles, self.x_tiles,))) \
-                as p:
+                                    self.clusters, self.input_images, self.y_tiles, self.x_tiles,))) as p:
             p.map(self.match_tile, ((y, x) for y in range(self.y_tiles) for x in range(self.x_tiles)))
         arr = np.frombuffer(shared_arr.get_obj())
         self.tile_cluster_indexes = arr.reshape((self.y_tiles, self.x_tiles))
 
     @staticmethod
     def match_tile_process_init(shared_arr_, target_image_, tile_height_, tile_width_, find_cluster_, clusters_,
-                                match_image_,
                                 input_images_, y_tiles_, x_tiles_):
         global shared_arr
         global target_image
@@ -95,7 +83,6 @@ class PhotomosaicGenerator:
         global tile_width
         global find_cluster
         global clusters
-        global match_image
         global input_images
         global y_tiles
         global x_tiles
@@ -106,7 +93,6 @@ class PhotomosaicGenerator:
         tile_width = tile_width_
         find_cluster = find_cluster_
         clusters = clusters_
-        match_image = match_image_
         input_images = input_images_
         y_tiles = y_tiles_
         x_tiles = x_tiles_
@@ -118,7 +104,7 @@ class PhotomosaicGenerator:
         cluster = find_cluster(target_tile, clusters)
         best_score = -sys.float_info.max
         for i in cluster:
-            score = match_image(target_tile, input_images[i])
+            score = -abs(np.linalg.norm(target_tile - input_images[i]))
             if score > best_score:
                 arr = np.frombuffer(shared_arr.get_obj())
                 arr = arr.reshape((y_tiles, x_tiles))
@@ -142,7 +128,7 @@ class PhotomosaicGenerator:
             self.output_image = np.concatenate((self.output_image, columns), axis=0)
 
     def save_image(self, output_directory_path):
-        io.imsave(output_directory_path, self.output_image, plugin='pil')
+        io.imsave(output_directory_path, self.output_image.astype(np.uint8))
 
     def get_image(self):
         return self.output_image

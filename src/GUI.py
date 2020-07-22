@@ -1,8 +1,5 @@
 from PyQt5 import QtCore
 
-from MSE_tile_matcher import MSE_match_images
-from K_means_clusterer import k_means_fit_images, k_means_find_cluster
-
 import os
 import time
 import threading
@@ -43,21 +40,24 @@ class window(QMainWindow):
         set_target_image_btn = QAction(QIcon(r'..\img_assets\landscape.png'), 'set target image', self)
         set_target_image_btn.triggered.connect(self.set_target_image)
 
-        generate_photomosaic_btn = QAction(QIcon(r'..\img_assets\pixelated_landscape.png'), 'generate photomosaic',
-                                           self)
+        generate_photomosaic_btn = QAction(QIcon(r'..\img_assets\pixelated_landscape.png'), 'generate photomosaic', self)
         generate_photomosaic_btn.triggered.connect(self.generate_photomosaic)
+
+        save_photomosaic_btn = QAction(QIcon(r'..\img_assets\save_icon.png'), 'generate photomosaic', self)
+        save_photomosaic_btn.triggered.connect(self.save_photomosaic)
 
         self.toolBar = self.addToolBar('Extraction')
         self.toolBar.addAction(set_input_dir_btn)
         self.toolBar.addAction(set_target_image_btn)
         self.toolBar.addAction(generate_photomosaic_btn)
+        self.toolBar.addAction(save_photomosaic_btn)
 
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.lay = QVBoxLayout(self.central_widget)
 
         self.image = QLabel(self)
-        pixmap = QPixmap(r'C:/my_stuff/photomosaic_generator/output_photos/best_image.jpg').scaled(800, 800, QtCore.Qt.KeepAspectRatio)
+        pixmap = QPixmap(r'..\img_assets\default_image.jpg').scaled(800, 800, QtCore.Qt.KeepAspectRatio)
         self.image.setPixmap(pixmap)
         self.lay.addWidget(self.image)
 
@@ -77,7 +77,7 @@ class window(QMainWindow):
     def set_target_image(self):
         options = QFileDialog.Options()
         options |= QFileDialog.DontUseNativeDialog
-        file_path, _ = QFileDialog.getOpenFileName(self, 'Select Target Image', '', 'Images (*.png *jpeg *jpg)', '..',
+        file_path, _ = QFileDialog.getOpenFileName(self, 'Select Target Image', '', 'Images (*jpg *.png)', '..',
                                                    options=options)
 
         if file_path != '':
@@ -85,6 +85,7 @@ class window(QMainWindow):
 
     def generate_photomosaic(self):
         def thread_generate_photomosaic(photomosaic_generator):
+            start = time.time()
             print('pre-processing target')
             photomosaic_generator.pre_process_target(self.x_tiles, self.y_tiles)
 
@@ -92,10 +93,7 @@ class window(QMainWindow):
             photomosaic_generator.pre_process_input(threads=7)
 
             print('fitting clusters')
-            photomosaic_generator.fit_clusters(k_means_fit_images, k_means_find_cluster)
-
-            print('setting image matcher')
-            photomosaic_generator.set_image_matcher(MSE_match_images)
+            photomosaic_generator.fit_clusters()
 
             print('matching tiles')
             photomosaic_generator.match_tiles()
@@ -122,9 +120,18 @@ class window(QMainWindow):
             self.show()
             print('image shown')
 
+            end = time.time()
+            print('time: ' + str(end-start) + 's')
+
         t = threading.Thread(target=thread_generate_photomosaic, args=(self.photomosaic_generator,), daemon=True)
         t.start()
 
+    def save_photomosaic(self):
+        options = QFileDialog.Options()
+        options |= QFileDialog.DontUseNativeDialog
+        file_name, type = QFileDialog.getSaveFileName(self, 'Save photomosaic', '',
+                                                   'jpg (*.jpg);;png (*.png)', '..', options=options)
+        self.photomosaic_generator.save_image(file_name+type[-5:-1])
 
 def run(photomosaic_generator):
     app = QApplication(sys.argv)
