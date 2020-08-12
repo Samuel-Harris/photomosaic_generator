@@ -1,5 +1,6 @@
-from PyQt5 import QtCore
+from PyQt5 import QtCore, QtWidgets
 
+import numpy as np
 import os
 import time
 import threading
@@ -10,6 +11,7 @@ from PyQt5.QtGui import QIcon, QColor, QImage, QPixmap
 from PyQt5.QtWidgets import QApplication, QWidget, QMainWindow, QPushButton, QAction, QMessageBox
 from PyQt5.QtWidgets import QCalendarWidget, QFontDialog, QColorDialog, QTextEdit, QFileDialog, QVBoxLayout
 from PyQt5.QtWidgets import QCheckBox, QProgressBar, QComboBox, QLabel, QStyleFactory, QLineEdit, QInputDialog
+from PhotomosaicGenerator import MissingComponentError
 
 
 class window(QMainWindow):
@@ -24,23 +26,14 @@ class window(QMainWindow):
         self.setWindowTitle('photomosaic generator')
         self.setWindowIcon(QIcon(r'..\img_assets\icon.png'))
 
-        extractAction = QAction('&Quit', self)
-        extractAction.setStatusTip('leave the app')
-        extractAction.triggered.connect(self.close_application)
-
-        self.statusBar()
-
-        mainMenu = self.menuBar()
-        fileMenu = mainMenu.addMenu('&File')
-        fileMenu.addAction(extractAction)
-
         set_input_dir_btn = QAction(QIcon(r'..\img_assets\folder.png'), 'set input image directory', self)
         set_input_dir_btn.triggered.connect(self.set_input_dir)
 
         set_target_image_btn = QAction(QIcon(r'..\img_assets\landscape.png'), 'set target image', self)
         set_target_image_btn.triggered.connect(self.set_target_image)
 
-        generate_photomosaic_btn = QAction(QIcon(r'..\img_assets\pixelated_landscape.png'), 'generate photomosaic', self)
+        generate_photomosaic_btn = QAction(QIcon(r'..\img_assets\pixelated_landscape.png'), 'generate photomosaic',
+                                           self)
         generate_photomosaic_btn.triggered.connect(self.generate_photomosaic)
 
         save_photomosaic_btn = QAction(QIcon(r'..\img_assets\save_icon.png'), 'generate photomosaic', self)
@@ -63,7 +56,9 @@ class window(QMainWindow):
 
         self.show()
 
-    def close_application(self):
+        self.error_msg = None
+
+    def closeEvent(self, event):
         sys.exit()
 
     def set_input_dir(self):
@@ -77,39 +72,36 @@ class window(QMainWindow):
     def set_target_image(self):
         options = QFileDialog.Options()
         options |= QFileDialog.DontUseNativeDialog
-        file_path, _ = QFileDialog.getOpenFileName(self, 'Select Target Image', '', 'Images (*jpg *.png)', '..',
+        file_path, _ = QFileDialog.getOpenFileName(self, 'Select Target Image', '..', 'Images (*jpg *.png)', '..',
                                                    options=options)
 
         if file_path != '':
             self.photomosaic_generator.set_target_image(file_path)
 
+            img = self.photomosaic_generator.get_target_image()
+            if img.dtype == np.float64:
+                img *= 255
+                img = img.astype('int8')
+            height, width, channel = img.shape
+            bytesPerLine = 3 * width
+            qImg = QImage(img, width, height, bytesPerLine, QImage.Format_RGB888)
+            pixmap = QPixmap.fromImage(qImg).scaled(800, 800, QtCore.Qt.KeepAspectRatio)
+            self.image.setPixmap(pixmap)
+            self.resize(pixmap.width(), pixmap.height())
+
     def generate_photomosaic(self):
         def thread_generate_photomosaic(photomosaic_generator):
             start = time.time()
-            print('pre-processing target')
-            photomosaic_generator.pre_process_target(self.x_tiles, self.y_tiles)
+            try:
+                photomosaic_generator.generate_image()
+            except MissingComponentError as msg:
+                self.error_msg = msg
+                return
 
-            print('pre-processing input')
-            photomosaic_generator.pre_process_input(threads=7)
-
-            print('fitting clusters')
-            photomosaic_generator.fit_clusters()
-
-            print('matching tiles')
-            photomosaic_generator.match_tiles()
-
-            print('combining images')
-            photomosaic_generator.combine_images()
-
-            print('showing images')
             img = photomosaic_generator.get_image()
-            print(img.shape)
 
             img *= 255
             img = img.astype('int8')
-            print(img[0][0])
-            print(type(img))
-            print(img.dtype)
             height, width, channel = img.shape
             bytesPerLine = 3 * width
             qImg = QImage(img, width, height, bytesPerLine, QImage.Format_RGB888)
@@ -121,17 +113,26 @@ class window(QMainWindow):
             print('image shown')
 
             end = time.time()
-            print('time: ' + str(end-start) + 's')
+            print('time: ' + str(end - start) + 's')
 
+        self.error_msg = None
         t = threading.Thread(target=thread_generate_photomosaic, args=(self.photomosaic_generator,), daemon=True)
         t.start()
+        if self.error_msg is not None:
+            error_msg_box = QMessageBox.critical(self, 'Error', str(self.error_msg))
 
     def save_photomosaic(self):
-        options = QFileDialog.Options()
-        options |= QFileDialog.DontUseNativeDialog
-        file_name, type = QFileDialog.getSaveFileName(self, 'Save photomosaic', '',
-                                                   'jpg (*.jpg);;png (*.png)', '..', options=options)
-        self.photomosaic_generator.save_image(file_name+type[-5:-1])
+        error_msg = self.photomosaic_generator.can_save_image()
+        if error_msg is None:
+            options = QFileDialog.Options()
+            options |= QFileDialog.DontUseNativeDialog
+            file_name, file_type = QFileDialog.getSaveFileName(self, 'Save photomosaic', '', 'jpg (*.jpg);;png (*.png)',
+                                                          '..', options=options)
+            file_type = file_type[-5:-1]
+            self.photomosaic_generator.save_image(file_name + file_type if file_name[-4:] != file_type else file_name)
+        else:
+            error_msg_box = QMessageBox.critical(self, 'Error', error_msg)
+
 
 def run(photomosaic_generator):
     app = QApplication(sys.argv)

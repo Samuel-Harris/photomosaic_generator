@@ -4,6 +4,7 @@ from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import scale
 from skimage import io
+from skimage.color import rgba2rgb
 from skimage.transform import resize
 from multiprocessing.pool import ThreadPool
 from multiprocessing import Pool, Array
@@ -31,14 +32,18 @@ class PhotomosaicGenerator:
         self.tile_cluster_indexes = None
 
     def set_target_image(self, target_image_file_path):
-        self.target_image = io.imread(target_image_file_path)
+        self.target_image = io.imread(target_image_file_path, plugin='matplotlib')
+        if self.target_image.shape[2] == 4:
+            self.target_image = rgba2rgb(self.target_image).astype(np.float64)  # **************** make image datatype uniform ***************
+        self.output_image = self.target_image
 
     def pre_process_target(self, x_tiles, y_tiles):
         self.y_tiles = y_tiles
         self.x_tiles = x_tiles
         self.tile_height = self.target_image.shape[0] // y_tiles
         self.tile_width = self.target_image.shape[1] // x_tiles
-        self.target_image = resize(self.target_image, (self.tile_height * y_tiles, self.tile_width * x_tiles), anti_aliasing=True)
+        self.target_image = resize(self.target_image, (self.tile_height * y_tiles, self.tile_width * x_tiles),
+                                   anti_aliasing=True)
 
     def set_input_directory_path(self, input_directory_path):
         self.input_directory_path = input_directory_path
@@ -56,11 +61,13 @@ class PhotomosaicGenerator:
                                             anti_aliasing=True))
 
     def fit_clusters(self):
-        reduced_data = np.reshape(self.input_images, (self.input_images.shape[0], self.input_images.shape[1]*self.input_images.shape[2]*self.input_images.shape[3]))
+        reduced_data = np.reshape(self.input_images, (self.input_images.shape[0],
+                                                      self.input_images.shape[1] * self.input_images.shape[2] *
+                                                      self.input_images.shape[3]))
         self.clusters = KMeans().fit(reduced_data)
 
     def find_cluster(self, target_tile, k_means):
-        img = np.reshape(target_tile, (1, target_tile.shape[0]*target_tile.shape[1]*target_tile.shape[2]))
+        img = np.array((target_tile.flatten(),))
         cluster_num = k_means.predict(img)
         return (i for i, x in enumerate(k_means.labels_) if x == cluster_num)
 
@@ -68,8 +75,9 @@ class PhotomosaicGenerator:
         shared_arr = Array(ctypes.c_double, [0.0] * self.y_tiles * self.x_tiles)
 
         with closing(ThreadPool(processes=processes, initializer=self.match_tile_process_init,
-                          initargs=(shared_arr, self.target_image, self.tile_height, self.tile_width, self.find_cluster,
-                                    self.clusters, self.input_images, self.y_tiles, self.x_tiles,))) as p:
+                                initargs=(
+                                shared_arr, self.target_image, self.tile_height, self.tile_width, self.find_cluster,
+                                self.clusters, self.input_images, self.y_tiles, self.x_tiles,))) as p:
             p.map(self.match_tile, ((y, x) for y in range(self.y_tiles) for x in range(self.x_tiles)))
         arr = np.frombuffer(shared_arr.get_obj())
         self.tile_cluster_indexes = arr.reshape((self.y_tiles, self.x_tiles))
@@ -127,14 +135,47 @@ class PhotomosaicGenerator:
                 columns = np.concatenate((columns, self.input_images[int(next(self.tile_cluster_indexes))]), axis=1)
             self.output_image = np.concatenate((self.output_image, columns), axis=0)
 
+    def generate_image(self):
+        if self.input_directory_path is None:
+            if self.target_image is None:
+                raise MissingComponentError('Cannot generate image - Input directory and target image are missing')
+            else:
+                raise MissingComponentError('Cannot generate image - Input directory is missing')
+        elif self.target_image is None:
+            raise MissingComponentError('Cannot generate image - Target image is missing')
+
+        print('pre-processing target')
+        self.pre_process_target(100, 100)
+
+        print('pre-processing input')
+        self.pre_process_input(threads=7)
+
+        print('fitting clusters')
+        self.fit_clusters()
+
+        print('matching tiles')
+        self.match_tiles()
+
+        print('combining images')
+        self.combine_images()
+
+    def can_save_image(self):
+        return 'Cannot save image - You must generate an image first before it can be saved' if self.output_image is None else None
+
     def save_image(self, output_directory_path):
-        io.imsave(output_directory_path, self.output_image.astype(np.uint8))
+        # if self.output_image is None:
+        #     raise MissingComponentError('Cannot save image - You must generate an image first before it can be saved')
+        if self.output_image.dtype == np.float64:
+            self.output_image *= 255
+            self.output_image = self.output_image.astype('int8')
+        io.imsave(output_directory_path, self.output_image.astype(np.uint8), quality=100)
 
     def get_image(self):
-        return self.output_image
+        return self.output_image.copy()
 
-    def show_image(self):
-        io.imshow(self.target_image)
-        io.show()
-        io.imshow(self.output_image)
-        io.show()
+    def get_target_image(self):
+        return self.target_image.copy()
+
+
+class MissingComponentError(Exception):
+    pass
