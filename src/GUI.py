@@ -149,6 +149,10 @@ class Window(QMainWindow):
 
                 end = time.time()
                 print('time: ' + str(end - start) + 's')
+            except MemoryError as e:
+                self.error_msg = 'Too much memory used. Try increasing the row/column count, removing some images ' \
+                                 'from the input directory, or reducing the size of the target image '
+                self.exception_raised.emit()
             except Exception as e:
                 self.error_msg = str(e)
                 self.exception_raised.emit()

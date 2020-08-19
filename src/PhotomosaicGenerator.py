@@ -4,9 +4,9 @@ from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import scale
 from skimage import io
-from skimage.color import rgba2rgb
-from skimage.util import img_as_ubyte
-from skimage.transform import resize
+from skimage import color
+from skimage import util
+from skimage import transform
 from multiprocessing.pool import ThreadPool
 from multiprocessing import Pool, Array
 from contextlib import closing
@@ -36,33 +36,36 @@ class PhotomosaicGenerator:
     def set_target_image(self, target_image_file_path):
         self.target_image = io.imread(target_image_file_path)
         if self.target_image.shape[2] == 4:
-            self.target_image = rgba2rgb(self.target_image)
-        self.target_image = img_as_ubyte(self.target_image)
+            self.target_image = color.rgba2rgb(self.target_image)
+        self.target_image = util.img_as_ubyte(self.target_image)
         self.output_image = self.target_image
 
     def pre_process_target(self, x_tiles, y_tiles):
         self.y_tiles = y_tiles
         self.x_tiles = x_tiles
-        self.tile_height = self.target_image.shape[0] // y_tiles
-        self.tile_width = self.target_image.shape[1] // x_tiles
-        self.target_image = resize(self.target_image, (self.tile_height * y_tiles, self.tile_width * x_tiles),
-                                   anti_aliasing=True, preserve_range=True)
+        self.tile_height = self.target_image.shape[0] // y_tiles if y_tiles < self.target_image.shape[0] else 1
+        self.tile_width = self.target_image.shape[1] // x_tiles if x_tiles < self.target_image.shape[1] else 1
+        self.target_image = transform.resize(self.target_image, (self.tile_height * y_tiles, self.tile_width * x_tiles),
+                                             anti_aliasing=True, preserve_range=True)
 
     def set_input_directory_path(self, input_directory_path):
         self.input_directory_path = input_directory_path
 
     def pre_process_input(self, threads=7):
-        # ************ optimise so everything isn't redone when only a small thing is changed ***************
         self.input_images = []
-        with closing(ThreadPool(threads)) as p:
-            p.map(partial(self.pre_process_input_image, dir_path=self.input_directory_path), filter(lambda filename: isfile(join(self.input_directory_path, filename)) and filename.endswith('.jpg') or filename.endswith('.png'), os.listdir(self.input_directory_path)))
-        self.input_images = np.array(self.input_images)
+        with closing(ThreadPool(1)) as p:
+            self.input_images = np.array(p.map(self.pre_process_input_image, filter(
+                lambda filename: isfile(join(self.input_directory_path, filename)) and filename.endswith(
+                    '.jpg') or filename.endswith('.png'), os.listdir(self.input_directory_path))))
 
-    def pre_process_input_image(self, filename, dir_path):
-        raw_img = io.imread(dir_path + "\\" + filename)
+    def pre_process_input_image(self, filename):
+        raw_img = io.imread(self.input_directory_path + "\\" + filename)
         if raw_img.shape[2] == 4:
-            raw_img = rgba2rgb(raw_img)
-        self.input_images.append(img_as_ubyte(resize(raw_img, (self.tile_height, self.tile_width), anti_aliasing=True)))
+            raw_img = color.rgba2rgb(raw_img)
+        raw_img = util.img_as_ubyte(raw_img)
+        raw_img = transform.resize(raw_img, (self.tile_height, self.tile_width), anti_aliasing=True,
+                                   preserve_range=True).astype(np.uint8)
+        return util.img_as_ubyte(raw_img)
 
     def fit_clusters(self):
         reduced_data = np.reshape(self.input_images, (self.input_images.shape[0],
@@ -80,8 +83,9 @@ class PhotomosaicGenerator:
 
         with closing(ThreadPool(processes=processes, initializer=self.match_tile_process_init,
                                 initargs=(
-                                shared_arr, self.target_image, self.tile_height, self.tile_width, self.find_cluster,
-                                self.clusters, self.input_images, self.y_tiles, self.x_tiles,))) as p:
+                                        shared_arr, self.target_image, self.tile_height, self.tile_width,
+                                        self.find_cluster,
+                                        self.clusters, self.input_images, self.y_tiles, self.x_tiles,))) as p:
             p.map(self.match_tile, ((y, x) for y in range(self.y_tiles) for x in range(self.x_tiles)))
         arr = np.frombuffer(shared_arr.get_obj())
         self.tile_cluster_indexes = arr.reshape((self.y_tiles, self.x_tiles))
@@ -115,11 +119,11 @@ class PhotomosaicGenerator:
         target_tile = target_image[y * tile_height:(y + 1) * tile_height, x * tile_width:(x + 1) * tile_width]
         cluster = find_cluster(target_tile, clusters)
         best_score = -sys.float_info.max
+        arr = np.frombuffer(shared_arr.get_obj())
+        arr = arr.reshape((y_tiles, x_tiles))
         for i in cluster:
             score = -abs(np.linalg.norm(target_tile - input_images[i]))
             if score > best_score:
-                arr = np.frombuffer(shared_arr.get_obj())
-                arr = arr.reshape((y_tiles, x_tiles))
                 arr[y][x] = i
                 if score > -3.5:
                     break
@@ -139,7 +143,7 @@ class PhotomosaicGenerator:
                 columns = np.concatenate((columns, self.input_images[int(next(self.tile_cluster_indexes))]), axis=1)
             self.output_image = np.concatenate((self.output_image, columns), axis=0)
 
-        self.output_image = img_as_ubyte(self.output_image)
+        self.output_image = util.img_as_ubyte(self.output_image)
 
     def can_generate_image(self):
         if self.input_directory_path is None:
@@ -155,7 +159,7 @@ class PhotomosaicGenerator:
             raise MissingComponentError('Cannot save image. You must generate an image first before it can be saved')
 
     def save_image(self, output_directory_path):
-        io.imsave(output_directory_path, self.output_image.astype(np.uint8), quality=100)  #***do i need astype?
+        io.imsave(output_directory_path, self.output_image.astype(np.uint8), quality=100, plugin='pil')
 
     def get_image(self):
         return self.output_image.copy()
