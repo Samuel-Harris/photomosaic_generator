@@ -12,10 +12,10 @@ from multiprocessing import Pool, Array
 from contextlib import closing
 from itertools import chain
 from functools import partial
-from os import walk
+from os.path import isfile, join
+import os
 import numpy as np
 import sys
-import gc
 
 
 class PhotomosaicGenerator:
@@ -55,15 +55,14 @@ class PhotomosaicGenerator:
         # ************ optimise so everything isn't redone when only a small thing is changed ***************
         self.input_images = []
         with closing(ThreadPool(threads)) as p:
-            for dir_path, subdir_names, file_names in walk(self.input_directory_path):
-                p.map(partial(self.pre_process_input_image, dir_path=dir_path), file_names)
-        print(len(self.input_images))
-        print(len(self.input_images[0]))
+            p.map(partial(self.pre_process_input_image, dir_path=self.input_directory_path), filter(lambda filename: isfile(join(self.input_directory_path, filename)) and filename.endswith('.jpg') or filename.endswith('.png'), os.listdir(self.input_directory_path)))
         self.input_images = np.array(self.input_images)
 
-    def pre_process_input_image(self, file_name, dir_path):
-        if file_name[-4:] == '.jpg':
-            self.input_images.append(img_as_ubyte(resize(io.imread(dir_path + "\\" + file_name), (self.tile_height, self.tile_width), anti_aliasing=True)))
+    def pre_process_input_image(self, filename, dir_path):
+        raw_img = io.imread(dir_path + "\\" + filename)
+        if raw_img.shape[2] == 4:
+            raw_img = rgba2rgb(raw_img)
+        self.input_images.append(img_as_ubyte(resize(raw_img, (self.tile_height, self.tile_width), anti_aliasing=True)))
 
     def fit_clusters(self):
         reduced_data = np.reshape(self.input_images, (self.input_images.shape[0],
