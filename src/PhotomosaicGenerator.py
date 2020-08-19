@@ -1,172 +1,247 @@
-import ctypes
-
-from sklearn.cluster import KMeans
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import scale
-from skimage import io
-from skimage import color
-from skimage import util
-from skimage import transform
-from multiprocessing.pool import ThreadPool
-from multiprocessing import Pool, Array
-from contextlib import closing
-from itertools import chain
-from functools import partial
-from os.path import isfile, join
+import contextlib
+import gc
+import itertools
 import os
-import numpy as np
 import sys
+from multiprocessing import pool
+from os import path
+import numpy as np
+from sklearn import cluster
+from skimage import color, io, transform, util
 
 
 class PhotomosaicGenerator:
+    """A class to generate photomosaics
+
+    :method __init__: initialises photomosaic generator variables
+    :method set_target_image: sets the image that the photomosaic generator is recreating
+    :method set_input_directory_path: sets the directory from which the photomosaic tiles are retrieved
+    :method pre_process_images: pre-processes the target image and images used as tiles for the photomosaic
+    :method generate_photomosaic: creates a photomosaic from the pre-processed tiles and target image
+    :method can_generate_photomosaic: checks whether a photomosaic can be created
+    :method can_save_image: checks whether the output image can be saved (can be target image or photomosaic, whichever
+     was last set/created)
+    :method save_image: saves output image in given location
+    :method get_output_image: returns a copy of the output image
+    :method get_target_image: returns a copy of the target image
+    """
+
     def __init__(self):
-        self.input_images = None
-        self.input_directory_path = None
-        self.target_image = None
-        self.output_image = None
-        self.x_tiles = None
-        self.y_tiles = None
-        self.tile_height = None
-        self.tile_width = None
-        self.dir_path = None
-        self.scores = None
-        self.clusters = None
-        self.tile_cluster_indexes = None
+        """Initialise the variables of the photomosaic generator."""
+
+        self.__target_image = None
+        self.__target_image_file_path = None
+
+        self.__input_images = None
+        self.__redo_pre_processing = True  # true if target image location or input image directory has changed else
+        # false
+        self.__input_directory_path = None
+
+        self.__clusters = None
+        self.__tile_cluster_indexes = None
+
+        self.__column_count = None
+        self.__row_count = None
+        self.__tile_height = None
+        self.__tile_width = None
+
+        self.__output_image = None
 
     def set_target_image(self, target_image_file_path):
-        self.target_image = io.imread(target_image_file_path)
-        if self.target_image.shape[2] == 4:
-            self.target_image = color.rgba2rgb(self.target_image)
-        self.target_image = util.img_as_ubyte(self.target_image)
-        self.output_image = self.target_image
+        """Sets the target image of the photomosaic generator.
 
-    def pre_process_target(self, x_tiles, y_tiles):
-        self.y_tiles = y_tiles
-        self.x_tiles = x_tiles
-        self.tile_height = self.target_image.shape[0] // y_tiles if y_tiles < self.target_image.shape[0] else 1
-        self.tile_width = self.target_image.shape[1] // x_tiles if x_tiles < self.target_image.shape[1] else 1
-        self.target_image = transform.resize(self.target_image, (self.tile_height * y_tiles, self.tile_width * x_tiles),
-                                             anti_aliasing=True, preserve_range=True)
+        :param target_image_file_path: the path to the target image
+        """
+
+        if self.__target_image_file_path != target_image_file_path:
+            self.__target_image_file_path = target_image_file_path
+            self.__redo_pre_processing = True
+            self.__target_image = io.imread(target_image_file_path)
+            if self.__target_image.shape[2] == 4:
+                self.__target_image = color.rgba2rgb(self.__target_image)
+            self.__target_image = util.img_as_ubyte(self.__target_image)
+            self.__output_image = self.__target_image
+
+    def __pre_process_target(self):
+        """Resizes the target image so that it can have tiles of equal size."""
+
+        self.__tile_height = self.__target_image.shape[0] // self.__row_count if \
+            self.__row_count < self.__target_image.shape[0] else 1
+
+        self.__tile_width = self.__target_image.shape[1] // self.__column_count if \
+            self.__column_count < self.__target_image.shape[1] else 1
+
+        self.__target_image = transform.resize(self.__target_image, (self.__tile_height * self.__row_count,
+                                                                     self.__tile_width * self.__column_count),
+                                               anti_aliasing=True, preserve_range=True).astype(np.uint8)
 
     def set_input_directory_path(self, input_directory_path):
-        self.input_directory_path = input_directory_path
+        """Stores the directory of the input images that will be used as tiles.
 
-    def pre_process_input(self, threads=7):
-        self.input_images = []
-        with closing(ThreadPool(1)) as p:
-            self.input_images = np.array(p.map(self.pre_process_input_image, filter(
-                lambda filename: isfile(join(self.input_directory_path, filename)) and filename.endswith(
-                    '.jpg') or filename.endswith('.png'), os.listdir(self.input_directory_path))))
+        :param input_directory_path: the path to the directory of the input images
+        :return:
+        """
 
-    def pre_process_input_image(self, filename):
-        raw_img = io.imread(self.input_directory_path + "\\" + filename)
+        if self.__input_directory_path != input_directory_path:
+            self.__input_directory_path = input_directory_path
+            self.__redo_pre_processing = True
+
+    def __pre_process_tiles(self, threads=7):
+        """Resizes and stores each image in the input image directory so that they can be used as tiles.
+
+        :param threads: the number of threads used to do this task (default 7)
+        """
+
+        del self.__input_images
+        gc.collect()  # garbage collects previous tiles so that multiple sets of tiles aren't held in memory
+        # simultaneously
+        with contextlib.closing(pool.ThreadPool(threads)) as p:
+            self.__input_images = \
+                np.array(p.map(self.__pre_process_tile,
+                               filter(lambda filename: (filename.endswith('.jpg') or filename.endswith('.png')) and
+                                                       path.isfile(path.join(self.__input_directory_path, filename)),
+                                      os.listdir(self.__input_directory_path))))
+
+    def __pre_process_tile(self, filename):
+        """Opens an image and resizes it to be the correct height and width for a tile.
+
+        :param filename: the name of the image
+        :return: the resized tile
+        """
+
+        raw_img = io.imread(self.__input_directory_path + "\\" + filename)
         if raw_img.shape[2] == 4:
             raw_img = color.rgba2rgb(raw_img)
         raw_img = util.img_as_ubyte(raw_img)
-        raw_img = transform.resize(raw_img, (self.tile_height, self.tile_width), anti_aliasing=True,
-                                   preserve_range=True).astype(np.uint8)
+        raw_img = transform.resize(raw_img, (self.__tile_height, self.__tile_width),
+                                   anti_aliasing=False, preserve_range=True).astype(np.uint8)
         return util.img_as_ubyte(raw_img)
 
-    def fit_clusters(self):
-        reduced_data = np.reshape(self.input_images, (self.input_images.shape[0],
-                                                      self.input_images.shape[1] * self.input_images.shape[2] *
-                                                      self.input_images.shape[3]))
-        self.clusters = KMeans().fit(reduced_data)
+    def __fit_clusters(self):
+        """Fits the tiles into clusters."""
 
-    def find_cluster(self, target_tile, k_means):
-        img = np.array((target_tile.flatten(),))
-        cluster_num = k_means.predict(img)
-        return (i for i, x in enumerate(k_means.labels_) if x == cluster_num)
+        reduced_data = np.reshape(self.__input_images, (self.__input_images.shape[0],
+                                                        self.__input_images.shape[1] * self.__input_images.shape[2] *
+                                                        self.__input_images.shape[3]))
+        self.__clusters = cluster.KMeans(n_clusters=min(24, len(self.__input_images))).fit(reduced_data)
 
-    def match_tiles(self, processes=7):
-        shared_arr = Array(ctypes.c_double, [0.0] * self.y_tiles * self.x_tiles)
 
-        with closing(ThreadPool(processes=processes, initializer=self.match_tile_process_init,
-                                initargs=(
-                                        shared_arr, self.target_image, self.tile_height, self.tile_width,
-                                        self.find_cluster,
-                                        self.clusters, self.input_images, self.y_tiles, self.x_tiles,))) as p:
-            p.map(self.match_tile, ((y, x) for y in range(self.y_tiles) for x in range(self.x_tiles)))
-        arr = np.frombuffer(shared_arr.get_obj())
-        self.tile_cluster_indexes = arr.reshape((self.y_tiles, self.x_tiles))
+    def pre_process_images(self, column_count, row_count):
+        """Pre-processes the target image and images in the input image directory so that they are ready to be made into
+        a photomosaic.
 
-    @staticmethod
-    def match_tile_process_init(shared_arr_, target_image_, tile_height_, tile_width_, find_cluster_, clusters_,
-                                input_images_, y_tiles_, x_tiles_):
-        global shared_arr
-        global target_image
-        global tile_height
-        global tile_width
-        global find_cluster
-        global clusters
-        global input_images
-        global y_tiles
-        global x_tiles
+        :param column_count: the number of tiles in each row
+        :param row_count: the number of tiles in each column
+        """
 
-        shared_arr = shared_arr_
-        target_image = target_image_
-        tile_height = tile_height_
-        tile_width = tile_width_
-        find_cluster = find_cluster_
-        clusters = clusters_
-        input_images = input_images_
-        y_tiles = y_tiles_
-        x_tiles = x_tiles_
+        if self.__column_count != column_count or self.__row_count != row_count:
+            self.__column_count = column_count
+            self.__row_count = row_count
+            self.__redo_pre_processing = True
 
-    @staticmethod
-    def match_tile(position):
+        if self.__redo_pre_processing:
+            self.__pre_process_target()
+            self.__pre_process_tiles()
+            self.__redo_pre_processing = False
+
+        self.__fit_clusters()
+
+    def __match_tiles(self):
+        """Matches appropriate tiles to each position in the photomosaic."""
+
+        self.__tile_cluster_indexes = np.zeros((self.__row_count, self.__column_count))
+
+        for y, x in ((y, x) for y in range(self.__row_count) for x in range(self.__column_count)):
+            self.__match_tile((y, x))
+
+    def __match_tile(self, position):
+        """Matches an appropriate tile to a position in the photomosaic."""
+
         y, x = position
-        target_tile = target_image[y * tile_height:(y + 1) * tile_height, x * tile_width:(x + 1) * tile_width]
-        cluster = find_cluster(target_tile, clusters)
+        target_tile = self.__target_image[y * self.__tile_height:(y + 1) * self.__tile_height,
+                                          x * self.__tile_width:(x + 1) * self.__tile_width]
+
+        img = np.array((target_tile.flatten(),))
+        cluster_num = self.__clusters.predict(img)
+        img_indexes = (i for i, x in enumerate(self.__clusters.labels_) if x == cluster_num)
+
         best_score = -sys.float_info.max
-        arr = np.frombuffer(shared_arr.get_obj())
-        arr = arr.reshape((y_tiles, x_tiles))
-        for i in cluster:
-            score = -abs(np.linalg.norm(target_tile - input_images[i]))
+        for i in img_indexes:
+            score = -abs(np.linalg.norm(target_tile - self.__input_images[i]))
             if score > best_score:
-                arr[y][x] = i
+                self.__tile_cluster_indexes[y, x] = i
                 if score > -3.5:
                     break
                 else:
                     best_score = score
 
-    def combine_images(self):
-        self.tile_cluster_indexes = chain(*self.tile_cluster_indexes)
-        self.output_image = self.input_images[int(next(self.tile_cluster_indexes))]
-        for x in range(1, self.x_tiles):
-            self.output_image = np.concatenate(
-                (self.output_image, self.input_images[int(next(self.tile_cluster_indexes))]), axis=1)
+    def __combine_tiles(self):
+        """Combines selected tiles to create the photomosaic."""
 
-        for y in range(1, self.y_tiles):
-            columns = self.input_images[int(next(self.tile_cluster_indexes))]
-            for x in range(1, self.x_tiles):
-                columns = np.concatenate((columns, self.input_images[int(next(self.tile_cluster_indexes))]), axis=1)
-            self.output_image = np.concatenate((self.output_image, columns), axis=0)
+        self.__tile_cluster_indexes = itertools.chain(*self.__tile_cluster_indexes)
+        self.__output_image = self.__input_images[int(next(self.__tile_cluster_indexes))]
 
-        self.output_image = util.img_as_ubyte(self.output_image)
+        for x in range(1, self.__column_count):
+            self.__output_image = np.concatenate(
+                (self.__output_image, self.__input_images[int(next(self.__tile_cluster_indexes))]), axis=1)
 
-    def can_generate_image(self):
-        if self.input_directory_path is None:
-            if self.target_image is None:
-                raise MissingComponentError('Cannot generate image. Input directory and target image are missing')
+        for y in range(1, self.__row_count):
+            columns = self.__input_images[int(next(self.__tile_cluster_indexes))]
+            for x in range(1, self.__column_count):
+                columns = np.concatenate((columns, self.__input_images[int(next(self.__tile_cluster_indexes))]), axis=1)
+            self.__output_image = np.concatenate((self.__output_image, columns), axis=0)
+
+        self.__output_image = util.img_as_ubyte(self.__output_image)
+
+    def generate_photomosaic(self):
+        """Creates a photomosaic from the pre-processed tiles and target image"""
+
+        self.__match_tiles()
+        self.__combine_tiles()
+
+    def can_generate_photomosaic(self):
+        """Checks whether a photomosaic can be created. Raises a MissingComponentError exception with appropriate error
+        message if not.
+        """
+
+        if self.__input_directory_path is None:
+            if self.__target_image is None:
+                raise MissingComponentError('Cannot generate image. Input directory and target image are missing.')
             else:
-                raise MissingComponentError('Cannot generate image. Input directory is missing')
-        elif self.target_image is None:
-            raise MissingComponentError('Cannot generate image. Target image is missing')
+                raise MissingComponentError('Cannot generate image. Input directory is missing.')
+        elif self.__target_image is None:
+            raise MissingComponentError('Cannot generate image. Target image is missing.')
 
     def can_save_image(self):
-        if self.output_image is None:
-            raise MissingComponentError('Cannot save image. You must generate an image first before it can be saved')
+        """Checks whether the output image can be saved (can be target image or photomosaic, whichever was last
+         set/created). Raises a MissingComponentError exception with appropriate error message if not.
+        """
+
+        if self.__output_image is None:
+            raise MissingComponentError('Cannot save image. You must generate an image first before it can be saved.')
 
     def save_image(self, output_directory_path):
-        io.imsave(output_directory_path, self.output_image.astype(np.uint8), quality=100, plugin='pil')
+        """Saves output image in given location.
 
-    def get_image(self):
-        return self.output_image.copy()
+        :param output_directory_path: the location to save the output image in
+        """
+
+        io.imsave(output_directory_path, self.__output_image.astype(np.uint8), quality=100, plugin='pil')
+
+    def get_output_image(self):
+        """Returns a copy of the output image"""
+
+        return self.__output_image.copy()
 
     def get_target_image(self):
-        return self.target_image.copy()
+        """Returns a copy of the target image"""
+
+        return self.__target_image.copy()
 
 
 class MissingComponentError(Exception):
+    """A class specifically for exceptions involving using photomosaic generator methods without necessary components
+    (e.g. calling can_save_image without there being an output_image to save).
+    """
+
     pass
