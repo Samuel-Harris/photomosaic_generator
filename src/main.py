@@ -5,6 +5,7 @@ import GUI
 
 
 def main():
+    """Instantiates the PhotomosaicGenerator and runs the GUI."""
     photomosaic_generator = PhotomosaicGenerator.PhotomosaicGenerator()
     app = QtWidgets.QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)

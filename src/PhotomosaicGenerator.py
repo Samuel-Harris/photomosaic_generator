@@ -13,7 +13,6 @@ from skimage import color, io, transform, util
 class PhotomosaicGenerator:
     """A class to generate photomosaics
 
-    :method __init__: initialises photomosaic generator variables
     :method set_target_image: sets the image that the photomosaic generator is recreating
     :method set_input_directory_path: sets the directory from which the photomosaic tiles are retrieved
     :method pre_process_images: pre-processes the target image and images used as tiles for the photomosaic
@@ -27,7 +26,7 @@ class PhotomosaicGenerator:
     """
 
     def __init__(self):
-        """Initialise the variables of the photomosaic generator."""
+        """Initialise the attributes of the photomosaic generator."""
 
         self.__target_image = None
         self.__target_image_file_path = None
@@ -59,8 +58,8 @@ class PhotomosaicGenerator:
             self.__target_image = io.imread(target_image_file_path)
             if self.__target_image.shape[2] == 4:
                 self.__target_image = color.rgba2rgb(self.__target_image)
-            self.__target_image = util.img_as_ubyte(self.__target_image)
-            self.__output_image = self.__target_image
+        self.__target_image = util.img_as_ubyte(self.__target_image)
+        self.__output_image = self.__target_image
 
     def __pre_process_target(self):
         """Resizes the target image so that it can have tiles of equal size."""
@@ -73,7 +72,7 @@ class PhotomosaicGenerator:
 
         self.__target_image = transform.resize(self.__target_image, (self.__tile_height * self.__row_count,
                                                                      self.__tile_width * self.__column_count),
-                                               anti_aliasing=True, preserve_range=True).astype(np.uint8)
+                                               anti_aliasing=True)
 
     def set_input_directory_path(self, input_directory_path):
         """Stores the directory of the input images that will be used as tiles.
@@ -102,29 +101,25 @@ class PhotomosaicGenerator:
                                                        path.isfile(path.join(self.__input_directory_path, filename)),
                                       os.listdir(self.__input_directory_path))))
 
-    def __pre_process_tile(self, filename):
+    def __pre_process_tile(self, file_name):
         """Opens an image and resizes it to be the correct height and width for a tile.
 
-        :param filename: the name of the image
+        :param file_name: the name of the image
         :return: the resized tile
         """
 
-        raw_img = io.imread(self.__input_directory_path + "\\" + filename)
+        raw_img = io.imread(self.__input_directory_path + "\\" + file_name)
         if raw_img.shape[2] == 4:
             raw_img = color.rgba2rgb(raw_img)
-        raw_img = util.img_as_ubyte(raw_img)
-        raw_img = transform.resize(raw_img, (self.__tile_height, self.__tile_width),
-                                   anti_aliasing=False, preserve_range=True).astype(np.uint8)
-        return util.img_as_ubyte(raw_img)
+        return transform.resize(raw_img, (self.__tile_height, self.__tile_width), anti_aliasing=False)
 
     def __fit_clusters(self):
-        """Fits the tiles into clusters."""
+        """Fits the tiles into __clusters."""
 
         reduced_data = np.reshape(self.__input_images, (self.__input_images.shape[0],
                                                         self.__input_images.shape[1] * self.__input_images.shape[2] *
                                                         self.__input_images.shape[3]))
-        self.__clusters = cluster.KMeans(n_clusters=min(24, len(self.__input_images))).fit(reduced_data)
-
+        self.__clusters = cluster.MiniBatchKMeans(n_clusters=min(8, len(self.__input_images))).fit(reduced_data)
 
     def pre_process_images(self, column_count, row_count):
         """Pre-processes the target image and images in the input image directory so that they are ready to be made into
@@ -165,15 +160,17 @@ class PhotomosaicGenerator:
         cluster_num = self.__clusters.predict(img)
         img_indexes = (i for i, x in enumerate(self.__clusters.labels_) if x == cluster_num)
 
-        best_score = -sys.float_info.max
+        best_score = sys.float_info.max
+        best_index = 0
         for i in img_indexes:
-            score = -abs(np.linalg.norm(target_tile - self.__input_images[i]))
-            if score > best_score:
-                self.__tile_cluster_indexes[y, x] = i
-                if score > -3.5:
+            score = abs(np.linalg.norm(target_tile - self.__input_images[i]))
+            if score < best_score:
+                best_index = i
+                if score < 0.3:
                     break
-                else:
-                    best_score = score
+                best_score = score
+        self.__tile_cluster_indexes[y, x] = best_index
+
 
     def __combine_tiles(self):
         """Combines selected tiles to create the photomosaic."""
@@ -241,7 +238,7 @@ class PhotomosaicGenerator:
 
 class MissingComponentError(Exception):
     """A class specifically for exceptions involving using photomosaic generator methods without necessary components
-    (e.g. calling can_save_image without there being an output_image to save).
+    (e.g. calling can_save_image without there being an __output_image to save).
     """
 
     pass

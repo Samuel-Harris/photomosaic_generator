@@ -5,13 +5,12 @@ from PyQt5.QtCore import Qt
 class ProgressWindow(QtWidgets.QWidget):
     """A class for the window that shows the progress of the photomosaic generation.
 
-    :method __init__: initialises the ProgressWindow variables
     :method show_pre_process_images_animation: shows the pre-processing images animation on the progress window
     :method show_tile_matching_animation: shows the tile matching animation on the progress window
     """
 
     def __init__(self):
-        """Initialises the ProgressWindow variables"""
+        """Initialises the ProgressWindow attributes"""
 
         super().__init__()
 
