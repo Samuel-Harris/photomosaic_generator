@@ -1,10 +1,10 @@
 import contextlib
 import gc
 import itertools
-import os
 import sys
+import warnings
+from glob import glob
 from multiprocessing import pool
-from os import path
 import numpy as np
 from sklearn import cluster
 from skimage import color, io, transform, util
@@ -61,6 +61,9 @@ class PhotomosaicGenerator:
         self.__target_image = util.img_as_ubyte(self.__target_image)
         self.__output_image = self.__target_image
 
+    def get_num_images(self):
+        return len(self.__input_images)
+
     def __pre_process_target(self):
         """Resizes the target image so that it can have tiles of equal size."""
 
@@ -94,24 +97,28 @@ class PhotomosaicGenerator:
         del self.__input_images
         gc.collect()  # garbage collects previous tiles so that multiple sets of tiles aren't held in memory
         # simultaneously
+        types = ("jpeg", "jpg", "png")
+        file_paths = []
+        for type in types:
+            file_paths.extend(glob(f"{self.__input_directory_path}/**/*.{type}", recursive=True))
         with contextlib.closing(pool.ThreadPool(threads)) as p:
             self.__input_images = \
-                np.array(p.map(self.__pre_process_tile,
-                               filter(lambda filename: (filename.endswith('.jpg') or filename.endswith('.png')) and
-                                                       path.isfile(path.join(self.__input_directory_path, filename)),
-                                      os.listdir(self.__input_directory_path))))
+                np.array(list(filter(lambda image: image is not None, p.map(self.__pre_process_tile, file_paths))))
 
-    def __pre_process_tile(self, file_name):
+    def __pre_process_tile(self, file_path):
         """Opens an image and resizes it to be the correct height and width for a tile.
 
-        :param file_name: the name of the image
+        :param file_path: the file path of the image
         :return: the resized tile
         """
-
-        raw_img = io.imread(self.__input_directory_path + "\\" + file_name)
-        if raw_img.shape[2] == 4:
-            raw_img = color.rgba2rgb(raw_img)
-        return transform.resize(raw_img, (self.__tile_height, self.__tile_width), anti_aliasing=False)
+        with warnings.catch_warnings():
+            try:
+                raw_img = io.imread(file_path)
+                if raw_img.shape[2] == 4:
+                    raw_img = color.rgba2rgb(raw_img)
+                return transform.resize(raw_img, (self.__tile_height, self.__tile_width), anti_aliasing=False)
+            except Exception:
+                return None
 
     def __fit_clusters(self):
         """Fits the tiles into __clusters."""
@@ -154,7 +161,7 @@ class PhotomosaicGenerator:
 
         y, x = position
         target_tile = self.__target_image[y * self.__tile_height:(y + 1) * self.__tile_height,
-                                          x * self.__tile_width:(x + 1) * self.__tile_width]
+                      x * self.__tile_width:(x + 1) * self.__tile_width]
 
         img = np.array((target_tile.flatten(),))
         cluster_num = self.__clusters.predict(img)
@@ -170,7 +177,6 @@ class PhotomosaicGenerator:
                     break
                 best_score = score
         self.__tile_cluster_indexes[y, x] = best_index
-
 
     def __combine_tiles(self):
         """Combines selected tiles to create the photomosaic."""

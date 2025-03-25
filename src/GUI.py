@@ -33,14 +33,14 @@ class Window(QtWidgets.QMainWindow):
 
         # setting up column count spin box
         self.x_tiles_spin_box = QtWidgets.QSpinBox()
-        self.x_tiles_spin_box.setRange(1, sys.maxsize)
+        self.x_tiles_spin_box.setRange(1, 2147483647)
         self.x_tiles_spin_box.setValue(100)
         self.x_tiles_spin_box.setPrefix('column count: ')
         self.toolBar.addWidget(self.x_tiles_spin_box)
 
         # setting up row count spin box
         self.y_tiles_spin_box = QtWidgets.QSpinBox()
-        self.y_tiles_spin_box.setRange(1, sys.maxsize)
+        self.y_tiles_spin_box.setRange(1, 2147483647)
         self.y_tiles_spin_box.setValue(100)
         self.y_tiles_spin_box.setPrefix('row count: ')
         self.toolBar.addWidget(self.y_tiles_spin_box)
